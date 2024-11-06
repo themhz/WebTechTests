@@ -12,7 +12,7 @@ if ('serviceWorker' in navigator) {
 
 // Check if Service Workers are supported
 if ('push_serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/push_service-worker.js')
+    navigator.serviceWorker.register('/service-worker.js')
     .then((registration) => {
         console.log('Service Worker registered with scope:', registration.scope);
     })

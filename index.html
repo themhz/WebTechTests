@@ -8,10 +8,10 @@
     <link rel="icon" href="data:,">
 
 </head>
-<body>
+<body style="background-color: black;">
     <button id="enable-notifications">Enable Notifications</button>
     <button id="notify-btn">Send Notification</button>
-    <button id="worker-btn">Run Worker</button>
+    <button id="worker-btn">Run Web Worker</button>
     <button id="service-worker-btn">Run Service Worker Task</button> 
     <button id="send-push">Send Push Notification</button>
 
@@ -92,9 +92,9 @@
             .then(response => response.json())
             .then(data => {
                 console.log(data);
-                new Notification(data.title, {
-                    body: data.body
-                });
+                // new Notification(data.title, {
+                //     body: data.body
+                // });
             })
             .catch(error => console.error('Error sending notification:', error));
         });
