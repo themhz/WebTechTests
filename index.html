@@ -1,106 +1,126 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset='utf-8'>
-    <meta http-equiv='X-UA-Compatible' content='IE=edge'>
-    <title>Page Title</title>
-    <meta name='viewport' content='width=device-width, initial-scale=1'>    
-    <link rel="icon" href="data:,">
-
+  <meta charset="UTF-8">
+  <title>WebRTC Data Channel Test</title>
+  <link rel="icon" href="data:,">
 </head>
-<body style="background-color: black;">
-    <button id="enable-notifications">Enable Notifications</button>
-    <button id="notify-btn">Send Notification</button>
-    <button id="worker-btn">Run Web Worker</button>
-    <button id="service-worker-btn">Run Service Worker Task</button> 
-    <button id="send-push">Send Push Notification</button>
+<body>
+  <h1>WebRTC Data Channel Test</h1>
+  <div id="messageLog"></div>
+  <input type="text" id="messageInput" placeholder="Type a message...">
+  <button id="sendButton" onclick="sendMessage()" disabled>Send</button>
 
-    <script>
-        document.getElementById('enable-notifications').addEventListener('click', () => {
-            // Check if the permission has not been granted yet
-            if (Notification.permission === 'default') {
-                Notification.requestPermission().then(permission => {
-                    if (permission === 'granted') {
-                        console.log('Notification permission granted.');
-                    } else {
-                        console.log('Notification permission denied.');
-                    }
-                });
-            } else if (Notification.permission === 'granted') {
-                console.log('Notification permission already granted.');
-            } else {
-                console.log('Notification permission was previously denied.');
-            }
-        });  
-                        
-        document.getElementById('notify-btn').addEventListener('click', ()=>{                        
-            if (Notification.permission === 'granted') {
-                new Notification('Test Notification', {
-                    body: 'This is a test notification to check visibility!'
-                });
-            } else {
-                console.log('Notification permission is not granted.');
-            }
+  <script>
+    const messageLog = document.getElementById('messageLog');
+    const messageInput = document.getElementById('messageInput');
+    const sendButton = document.getElementById('sendButton');
+    const ws = new WebSocket('ws://localhost:3000');
+    let peerConnection;
+    let dataChannel;
+
+    const config = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    ws.onmessage = async (message) => {
+      if (message.data instanceof Blob) {
+        // Convert Blob to text
+        message.data.text().then(text => {
+          processMessage(text);
+        }).catch(error => {
+          console.error("Error converting Blob to text:", error);
         });
+      } else {
+        processMessage(message.data);
+      }
+    };
 
-        document.getElementById('worker-btn').addEventListener('click', ()=>{                        
-            
-            // Check if the browser supports Web Workers
-            if (window.Worker) {
-                // Create a new Web Worker
-                const worker = new Worker('webWorker1.js');
+    function processMessage(data) {
+      let parsedData;
+      try {
+        parsedData = JSON.parse(data);
+        console.log("WebSocket JSON message received:", parsedData);
+      } catch (e) {
+        console.error("Received non-JSON message:", data);
+        return;
+      }
 
-                // Send a message to the worker (optional)
-                worker.postMessage("Hello, worker!");
+      // Process the parsed JSON data for offer, answer, and ICE candidates
+      if (parsedData.offer) {
+        createAnswer(parsedData.offer);
+      } else if (parsedData.answer) {
+        peerConnection.setRemoteDescription(new RTCSessionDescription(parsedData.answer));
+      } else if (parsedData.iceCandidate) {
+        peerConnection.addIceCandidate(new RTCIceCandidate(parsedData.iceCandidate));
+      }
+    }
+    async function startConnection() {
+      peerConnection = new RTCPeerConnection(config);
 
-                // Listen for messages from the worker
-                worker.onmessage = function(event) {
-                    console.log("Message from worker:", event.data);
-                    new Notification('Test Notification', {
-                        body: event.data
-                    }).onclick = function () {
-                        window.focus();
-                        console.log('Notification clicked!');
-                    };; 
+      // Create a data channel if this is the caller
+      if (location.hash === '#caller') {
+        dataChannel = peerConnection.createDataChannel("chat");
+        setupDataChannel();
+        createOffer();
+      } else {
+        peerConnection.ondatachannel = (event) => {
+          dataChannel = event.channel;
+          setupDataChannel();
+        };
+      }
 
-                    
-                };
-                
+      peerConnection.onicecandidate = ({ candidate }) => {
+        if (candidate) {
+          ws.send(JSON.stringify({ iceCandidate: candidate }));
+        }
+      };
+    }
 
-                // Error handling for the worker
-                worker.onerror = function(error) {
-                    console.error("Error in worker:", error.message);
-                };
-            } else {
-                console.log("Your browser doesn't support Web Workers.");
-            }
+    function setupDataChannel() {
+      dataChannel.onopen = () => {
+        logMessage('Data channel opened');
+        sendButton.disabled = false; // Enable send button when data channel is open
+      };
+      dataChannel.onclose = () => {
+        logMessage('Data channel closed');
+        sendButton.disabled = true; // Disable send button when data channel is closed
+      };
+      dataChannel.onmessage = (event) => logMessage('Peer: ' + event.data);
+    }
 
-        });
+    function logMessage(message) {
+      const newMessage = document.createElement('p');
+      newMessage.textContent = message;
+      messageLog.appendChild(newMessage);
+    }
 
-        document.getElementById('service-worker-btn').addEventListener('click', () => {
-            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-                navigator.serviceWorker.controller.postMessage('startTask');
-            } else {
-                console.log("Service Worker is not controlling this page.");
-            }
-        });
+    async function createOffer() {
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      ws.send(JSON.stringify({ offer }));
+    }
 
-        document.getElementById('send-push').addEventListener('click', async () => {
-            await fetch('http://127.0.0.1:5000/send-notification', {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log(data);
-                // new Notification(data.title, {
-                //     body: data.body
-                // });
-            })
-            .catch(error => console.error('Error sending notification:', error));
-        });
+    async function createAnswer(offer) {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      ws.send(JSON.stringify({ answer }));
+    }
 
-    </script>
+    function sendMessage() {
+      if (dataChannel && dataChannel.readyState === "open") {
+        const message = messageInput.value;
+        dataChannel.send(message);
+        logMessage('You: ' + message);
+        messageInput.value = '';
+      } else {
+        console.warn("Data channel is not open or defined.");
+      }
+    }
 
-    <script src='main.js'></script>    
+    startConnection();
+  </script>
 </body>
 </html>
+
