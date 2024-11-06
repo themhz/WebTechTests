@@ -42,14 +42,14 @@ app.post('/subscribe', (req, res) => {
 
 
 app.get('/hello', (req, res) => {
-    res.status(200).json({ message: 'Hello World!' });
+    res.status(201).json({ message: 'Hello World!' });
 });
 
 // Endpoint to trigger push notification (for testing)
 app.post('/send-notification', (req, res) => {
     const notificationPayload = JSON.stringify({
         title: 'Push Notification',
-        body: 'This is a test push notification! from the serverrrerr',
+        body: 'This is a test push notification! from the server',
     });
 
     // Send a push notification to each subscribed client
