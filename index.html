@@ -18,14 +18,20 @@
     const ws = new WebSocket('ws://localhost:3000');
     let peerConnection;
     let dataChannel;
+    let iceCandidateQueue = [];
+    let remoteDescriptionSet = false;
+    let isConnectionStarted = false;
 
     const config = {
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ]
     };
 
     ws.onmessage = async (message) => {
       if (message.data instanceof Blob) {
-        // Convert Blob to text
         message.data.text().then(text => {
           processMessage(text);
         }).catch(error => {
@@ -46,45 +52,99 @@
         return;
       }
 
-      // Process the parsed JSON data for offer, answer, and ICE candidates
       if (parsedData.offer) {
         createAnswer(parsedData.offer);
       } else if (parsedData.answer) {
-        peerConnection.setRemoteDescription(new RTCSessionDescription(parsedData.answer));
+        peerConnection.setRemoteDescription(new RTCSessionDescription(parsedData.answer))
+          .then(() => {
+            console.log("Remote description set successfully");
+            remoteDescriptionSet = true;
+            iceCandidateQueue.forEach(candidate => {
+              peerConnection.addIceCandidate(candidate).catch(error => console.error("Error adding queued ICE candidate:", error));
+            });
+            iceCandidateQueue = [];
+          }).catch(error => console.error("Error setting remote description:", error));
       } else if (parsedData.iceCandidate) {
-        peerConnection.addIceCandidate(new RTCIceCandidate(parsedData.iceCandidate));
+        if (remoteDescriptionSet) {
+          peerConnection.addIceCandidate(new RTCIceCandidate(parsedData.iceCandidate))
+            .catch(error => console.error("Error adding ICE candidate:", error));
+        } else {
+          iceCandidateQueue.push(new RTCIceCandidate(parsedData.iceCandidate));
+        }
       }
     }
+
     async function startConnection() {
+      if (isConnectionStarted) {
+        console.warn("Connection already started, skipping.");
+        return;
+      }
+      isConnectionStarted = true;
       peerConnection = new RTCPeerConnection(config);
 
-      // Create a data channel if this is the caller
       if (location.hash === '#caller') {
+        console.log("Setting up data channel as caller");
         dataChannel = peerConnection.createDataChannel("chat");
         setupDataChannel();
-        createOffer();
+        
+        // Create the offer with a slight delay for Firefox stability
+        setTimeout(async () => {
+          await createOffer();
+        }, 100);
       } else {
         peerConnection.ondatachannel = (event) => {
+          console.log("Data channel received by non-caller");
           dataChannel = event.channel;
           setupDataChannel();
         };
       }
 
       peerConnection.onicecandidate = ({ candidate }) => {
-        if (candidate) {
-          ws.send(JSON.stringify({ iceCandidate: candidate }));
+        if (candidate && peerConnection.connectionState !== 'closed') {
+          try {
+            ws.send(JSON.stringify({ iceCandidate: candidate }));
+          } catch (error) {
+            console.error("Failed to send ICE candidate:", error);
+          }
+        } else {
+          console.warn("ICE candidate not sent; peer connection may be closed or candidate is null");
         }
       };
-    }
+
+      peerConnection.onconnectionstatechange = () => {
+        console.log("Connection state:", peerConnection.connectionState);
+      };
+
+      peerConnection.oniceconnectionstatechange = () => {
+        console.log("ICE connection state:", peerConnection.iceConnectionState);
+      };
+
+      peerConnection.onicegatheringstatechange = () => {
+        console.log("ICE gathering state changed:", peerConnection.iceGatheringState);
+      };
+
+      peerConnection.onnegotiationneeded = async () => {
+          if (peerConnection.signalingState === "stable") {
+            console.log("Negotiation needed, creating offer");
+            setTimeout(async () => {
+              await createOffer();
+            }, 100);
+          } else {
+            console.warn("Negotiation skipped, signaling state:", peerConnection.signalingState);
+          }
+        };
+
+        
+      }
 
     function setupDataChannel() {
       dataChannel.onopen = () => {
         logMessage('Data channel opened');
-        sendButton.disabled = false; // Enable send button when data channel is open
+        sendButton.disabled = false;
       };
       dataChannel.onclose = () => {
         logMessage('Data channel closed');
-        sendButton.disabled = true; // Disable send button when data channel is closed
+        sendButton.disabled = true;
       };
       dataChannel.onmessage = (event) => logMessage('Peer: ' + event.data);
     }
@@ -96,16 +156,40 @@
     }
 
     async function createOffer() {
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      ws.send(JSON.stringify({ offer }));
+      if (peerConnection.signalingState !== "stable") {
+        console.warn("Peer connection is not in a stable state, skipping offer creation.");
+        return;
+      }
+
+      try {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        ws.send(JSON.stringify({ offer }));
+        console.log("Offer created and sent successfully");
+      } catch (error) {
+        console.error("Failed to create offer:", error);
+      }
     }
 
     async function createAnswer(offer) {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      ws.send(JSON.stringify({ answer }));
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer))
+        .then(() => console.log("Remote description set for answer"))
+        .catch(error => console.error("Error setting remote description for answer:", error));
+      remoteDescriptionSet = true;
+
+      try {
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        ws.send(JSON.stringify({ answer }));
+        console.log("Answer created and sent successfully");
+
+        iceCandidateQueue.forEach(candidate => {
+          peerConnection.addIceCandidate(candidate).catch(error => console.error("Error adding queued ICE candidate:", error));
+        });
+        iceCandidateQueue = [];
+      } catch (error) {
+        console.error("Failed to create answer:", error);
+      }
     }
 
     function sendMessage() {
@@ -123,4 +207,3 @@
   </script>
 </body>
 </html>
-
